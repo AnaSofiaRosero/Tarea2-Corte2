@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Between, ILike, IsNull, Not, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
+import { Between, ILike, IsNull, Not, Repository } from 'typeorm';
 
 import { RoleNotFoundException, UserNotFoundException } from '../../common/exceptions';
 import { User } from '../entities/user.entity';
@@ -20,7 +20,7 @@ export class UserService {
         private readonly configService: ConfigService,
     ) {}
 
-    async create(createUserDto: CreateUserDto): Promise<User> {
+    async create(createUserDto: CreateUserDto): Promise<Omit<User, 'passwordHash'>> {
         const { roleId, ...userData } = createUserDto;
         const role = await this.roleService.findOne(roleId);
         if (!role) {
@@ -28,9 +28,7 @@ export class UserService {
         }
 
         const saltRounds = parseInt(this.configService.get<string>('SALT_ROUNDS') ?? '10', 10);
-
         const passwordHashed = await bcrypt.hash(userData.passwordHash, saltRounds);
-
         const user = this.userRepository.create({
             ...userData,
             passwordHash: passwordHashed,
@@ -38,23 +36,25 @@ export class UserService {
         });
 
         const savedUser = await this.userRepository.save(user);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { passwordHash: _, ...userWithoutPassword } = savedUser;
-        return userWithoutPassword as User;
+        return this.removePassword(savedUser);
     }
 
-    findAll() {
-        return this.userRepository.find({
+    async findAll(): Promise<Array<Omit<User, 'passwordHash'>>> {
+        const users = await this.userRepository.find({
             relations: {
                 role: true,
             },
+            order: {
+                createdAt: 'DESC',
+            },
         });
+        return users.map((user) => this.removePassword(user));
     }
 
     async findOne(id: number, relations: boolean = false): Promise<User> {
         const user = await this.userRepository.findOne({
             where: { id },
-            relations: { role: relations ? { rolePermissions: { permission: true } } : false },
+            relations: { role: relations ? { rolePermissions: { permission: true } } : true },
         });
         if (!user) {
             throw new UserNotFoundException(id);
@@ -63,7 +63,7 @@ export class UserService {
     }
 
     async findByEmail(email: string): Promise<User | null> {
-        const user = await this.userRepository.findOne({
+        return await this.userRepository.findOne({
             where: { email },
             relations: {
                 role: {
@@ -73,65 +73,36 @@ export class UserService {
                 },
             },
         });
-        return user || null;
     }
 
-    // /**
-    //  * Find one user with their role
-    //  */
-    // findOne(id: number) {
-    //     return this.userRepository.findOne({
-    //         where: { id },
-    //         relations: ['role'],
-    //     });
-    // }
+    async update(id: number, updateUserDto: UpdateUserDto): Promise<Omit<User, 'passwordHash'>> {
+        const { roleId, passwordHash, ...userData } = updateUserDto;
+        const user = await this.findOne(id);
 
-    // /**
-    //  * Find user with role and permissions
-    //  */
-    // async findOneWithPermissions(id: number) {
-    //     return await this.userRepository.findOne({
-    //         where: { id },
-    //         relations: ['role', 'role.permissions'],
-    //     });
-    // }
-
-    // /**
-    //  * Find all users with their roles and permissions
-    //  */
-    // async findAllWithPermissions() {
-    //     return await this.userRepository.find({
-    //         relations: ['role', 'role.permissions'],
-    //         order: { createdAt: 'DESC' },
-    //     });
-    // }
-
-    async update(id: number, updateUserDto: UpdateUserDto) {
-        if (updateUserDto.roleId) {
-            const role = await this.roleService.findOne(updateUserDto.roleId);
+        if (roleId) {
+            const role = await this.roleService.findOne(roleId);
             if (!role) {
-                throw new RoleNotFoundException(updateUserDto.roleId);
+                throw new RoleNotFoundException(roleId);
             }
+            user.role = role;
         }
 
-        await this.findOne(id);
-        await this.userRepository.update(id, updateUserDto);
-        return this.findOne(id);
-    }
-
-    async remove(id: number) {
-        await this.findOne(id);
-        const result = await this.userRepository.delete(id);
-        if (result.affected) {
-            return { id };
+        if (passwordHash) {
+            const saltRounds = parseInt(this.configService.get<string>('SALT_ROUNDS') ?? '10', 10);
+            user.passwordHash = await bcrypt.hash(passwordHash, saltRounds);
         }
-        return null;
+
+        this.userRepository.merge(user, userData);
+        const savedUser = await this.userRepository.save(user);
+        return this.removePassword(savedUser);
     }
 
-    /**
-     * Find users by role name
-     */
-    async findByRole(roleName: string) {
+    async remove(id: number): Promise<void> {
+        const user = await this.findOne(id);
+        await this.userRepository.remove(user);
+    }
+
+    async findByRole(roleName: string): Promise<User[]> {
         return await this.userRepository.find({
             where: { role: { name: roleName } },
             relations: {
@@ -141,26 +112,16 @@ export class UserService {
         });
     }
 
-    /**
-     * Count total users
-     */
     async count(): Promise<number> {
         return await this.userRepository.count();
     }
 
-    /**
-     * Count users by role
-     */
     async countByRole(roleName: string): Promise<number> {
         return await this.userRepository.count({
             where: { role: { name: roleName } },
         });
     }
 
-    /**
-     * Retorna usuarios registrados dentro de un rango de fechas con paginación.
-     * Demuestra el operador Between(), ordenamiento y paginación con findAndCount().
-     */
     async findUsersCreatedBetween(startDate: Date, endDate: Date, limit = 10, offset = 0) {
         return await this.userRepository.findAndCount({
             where: {
@@ -177,10 +138,6 @@ export class UserService {
         });
     }
 
-    /**
-     * Búsqueda por coincidencia parcial en username o email, requiriendo que tenga bio.
-     * Demuestra condiciones tipo OR (pasando un arreglo a where) y el operador Not(IsNull()).
-     */
     async searchUsersWithBio(term: string) {
         return await this.userRepository.find({
             where: [
@@ -196,10 +153,6 @@ export class UserService {
         });
     }
 
-    /**
-     * Obtiene el usuario con su rol y los permisos asociados cargando relaciones anidadas
-     * con findOne() sin necesidad de QueryBuilder.
-     */
     async getUserWithPermissions(userId: number) {
         const user = await this.userRepository.findOne({
             where: { id: userId },
@@ -230,5 +183,10 @@ export class UserService {
             },
             permissions,
         };
+    }
+
+    private removePassword(user: User): Omit<User, 'passwordHash'> {
+        const { passwordHash: _passwordHash, ...safeUser } = user;
+        return safeUser;
     }
 }

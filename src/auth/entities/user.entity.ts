@@ -1,3 +1,4 @@
+import { Exclude } from 'class-transformer';
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 import { Role } from './role.entity';
@@ -14,6 +15,7 @@ export class User {
     @Column({ unique: true, length: 255 }) // Unique email address for each user
     email: string;
 
+    @Exclude() // Nunca se serializa en las respuestas HTTP
     @Column({ length: 255, name: 'password_hash' }) // Hashed password for each user
     passwordHash: string;
 

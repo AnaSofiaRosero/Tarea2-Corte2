@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ILike, Repository } from 'typeorm';
+
+import { RoleNotFoundException } from '../../common/exceptions';
 import { InjectRepository } from '@nestjs/typeorm';
 
 import { Role } from '../entities/role.entity';
@@ -23,21 +25,27 @@ export class RoleService {
         return await this.roleRepository.find();
     }
 
-    async findOne(id: number): Promise<Role | null> {
-        return await this.roleRepository.findOneBy({ id });
-    }
-
-    async update(id: number, updateRoleDto: UpdateRoleDto): Promise<Role | null> {
-        await this.roleRepository.update(id, updateRoleDto);
-        return await this.roleRepository.findOneBy({ id });
-    }
-
-    async remove(id: number): Promise<{ id: number } | null> {
-        const result = await this.roleRepository.delete(id);
-        if (result.affected) {
-            return { id };
+    async findOne(id: number): Promise<Role> {
+        const role = await this.roleRepository.findOne({
+            where: { id },
+            relations: { rolePermissions: { permission: true } },
+        });
+        if (!role) {
+            throw new RoleNotFoundException(id);
         }
-        return null;
+        return role;
+    }
+
+    async update(id: number, updateRoleDto: UpdateRoleDto): Promise<Role> {
+        const role = await this.findOne(id);
+        this.roleRepository.merge(role, updateRoleDto);
+        return await this.roleRepository.save(role);
+    }
+
+    async remove(id: number): Promise<void> {
+        const role = await this.findOne(id);
+        // Si hay usuarios con este rol, la FK falla y QueryFailedFilter responde 409
+        await this.roleRepository.remove(role);
     }
 
     /**

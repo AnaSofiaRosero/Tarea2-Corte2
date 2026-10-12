@@ -2,13 +2,16 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 
+import { ActivityLogsModule } from './activity-logs/activity-logs.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { ExercisesModule } from './exercises/exercises.module';
+import { RoutinesModule } from './routines/routines.module';
 
 @Module({
     imports: [
-        ConfigModule.forRoot({ isGlobal: true }), // Load .env file and make it available globally
+        ConfigModule.forRoot({ isGlobal: true }),
         TypeOrmModule.forRootAsync({
             imports: [ConfigModule],
             inject: [ConfigService],
@@ -25,8 +28,10 @@ import { AuthModule } from './auth/auth.module';
                 }) as TypeOrmModuleOptions,
         }),
         AuthModule,
+        ExercisesModule,
+        RoutinesModule,
+        ActivityLogsModule,
     ],
-
     controllers: [AppController],
     providers: [AppService],
 })
